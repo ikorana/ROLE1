@@ -21,7 +21,7 @@ typedef struct __attribute__((packed, aligned(8))) {
     uint32_t random_address;        // 4 byte
     uint16_t groups;                // 2 byte
     uint8_t  scene[16];             // 16 byte
-    
+
     uint8_t  power_on_level;        // 1 byte
     uint8_t  system_failure_level;  // 1 byte
     uint8_t  min_level;             // 1 byte
@@ -33,8 +33,14 @@ typedef struct __attribute__((packed, aligned(8))) {
     uint8_t  PHM;                   // 1 byte
     uint8_t  device_type;
     uint8_t  next_device_type;
-   
-    uint8_t  reserved[5];           // Toplam boyutu 40 byte'a (8'in katı) tamamlamak için padding
+
+    // Kartın RS485 kimliği (yalnızca AdresList[0].uart_ID anlamlıdır).
+    // Fabrika/blank-flash varsayılanı 254 — configürasyon sırasında kalıcı bir
+    // kimliğe değiştirilir. 254 "henüz atanmamış", 255 ileride broadcast için
+    // ayrılmış tutulur.
+    uint8_t  uart_ID;
+
+    uint8_t  reserved[4];           // Toplam boyutu 40 byte'a (8'in katı) tamamlamak için padding
 } DALI_Address_t; // Toplam: 40 Byte
 
 bool read_eeprom(volatile DALI_Address_t *settings_array);

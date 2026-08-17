@@ -24,8 +24,9 @@ bool read_eeprom(volatile DALI_Address_t *settings_array) {
             settings_array[i].fade_time               = 0x00;             
             settings_array[i].efade_time_base         = 0x00;       
             settings_array[i].efade_multiplayer       = 0x00;  
-            settings_array[i].device_type             = 0x07; 
+            settings_array[i].device_type             = 0x07;
             settings_array[i].next_device_type        = 0x07;
+            settings_array[i].uart_ID                 = 254; // fabrika/blank-flash varsayılanı
         }
              
         write_eeprom(settings_array); 

@@ -300,7 +300,7 @@ void command_process(char * data)
                 uint8_t dev=0xFF, adr=0xFF;
                 json_get_int(data, tokens, r,"dev",&dev);
                 json_get_int(data, tokens, r,"adr",&adr);
-                if (dev>0 && dev<4) {
+                if (dev>0 && dev<6) {
                   if (adr<64 || adr==0xFF) {
                     AdresList[dev-1].short_address = adr;
                     write_eeprom(AdresList);
@@ -308,7 +308,7 @@ void command_process(char * data)
                 }
               }
 
-              if (strcmp(command,"status")==0) 
+              if (strcmp(command,"status")==0)
               {
                 uint8_t dev=0xFF, dur=0xFF;
                 json_get_int(data, tokens, r,"dev",&dev);
@@ -319,7 +319,23 @@ void command_process(char * data)
                   if (dur==2) Relay_Toggle(&relays[dev-1]);
                 }
               }
-        }        
+
+              if (strcmp(command,"get_id")==0) {
+                printf("{\"com\":\"get_id\",\"id\":%d}#\r\n", AdresList[0].uart_ID);
+              }
+
+              if (strcmp(command,"set_id")==0) {
+                uint8_t id=0xFF;
+                json_get_int(data, tokens, r,"id",&id);
+                // 254: fabrika/blank-flash varsayılanı, 255: ileride broadcast için
+                // ayrılmış — ikisi de kalıcı kimlik olarak atanamaz.
+                if (id<254) {
+                  AdresList[0].uart_ID = id;
+                  write_eeprom(AdresList);
+                }
+                printf("{\"com\":\"set_id\",\"id\":%d}#\r\n", AdresList[0].uart_ID);
+              }
+        }
     }
       
 }
