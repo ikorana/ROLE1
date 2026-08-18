@@ -40,7 +40,12 @@ typedef struct __attribute__((packed, aligned(8))) {
     // ayrılmış tutulur.
     uint8_t  uart_ID;
 
-    uint8_t  reserved[4];           // Toplam boyutu 40 byte'a (8'in katı) tamamlamak için padding
+    // Bu kanalın (Lamba N) fiziksel tuşu nasıl davranacak:
+    // 0 = toggle (basma onaylanınca aç/kapa değiştir, mevcut varsayılan)
+    // 1 = momentary (basılıyken aç, bırakılınca kapat)
+    uint8_t  tus_type;
+
+    uint8_t  reserved[3];           // Toplam boyutu 40 byte'a (8'in katı) tamamlamak için padding
 } DALI_Address_t; // Toplam: 40 Byte
 
 bool read_eeprom(volatile DALI_Address_t *settings_array);

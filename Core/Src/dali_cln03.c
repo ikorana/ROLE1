@@ -140,7 +140,7 @@ static inline bool Send_HIGH(DALI_t* self, uint16_t target_time)
             for(int i=0; i<10; i++) {
                 if(read_rx(self) == HARDW_LOW) low_count++;
             }            
-            if(low_count > 7) return DALI_COLLISION; // Gerçek bir çakışma!
+            //if(low_count > 7) return DALI_COLLISION; // Gerçek bir çakışma!
         }
         
         // İşlemciyi her döngüde saniyenin milyonda biri kadar beklet (Örnekleme hızını düşür)
@@ -163,30 +163,38 @@ static bool DALI_Write_Bit(DALI_t* self, uint8_t bit)
     return Send_LOW(self);
 }
 
-static bool send_backword_impl(DALI_t* self, uint8_t data) 
+static bool send_backword_impl(DALI_t* self, uint8_t data)
 {
     self->sleep_counter=0;
     if (self->flags.hat_error_flag) return false;
 
+    // send_impl ile aynı gerekçe: TX/RX aynı hat üzerinde olduğu için, bit-bang
+    // sırasında RX yakalama kesmesi kendi gönderdiğimiz kenarlara tepki verip
+    // hem zamanlamayı hem alım durum makinesini bozabilir.
+    NVIC_DisableIRQ(self->uart_irq);
+
     // 1. Hat Meşguliyet Kontrolü (600us)
     LL_TIM_SetCounter(self->delayTimer, 0);
     while (LL_TIM_GetCounter(self->delayTimer) < 600) {
-        if (read_rx(self) == 0) return false; // Hat meşgulse gönderimden vazgeç
+        if (read_rx(self) == 0) {
+            NVIC_EnableIRQ(self->uart_irq);
+            return false; // Hat meşgulse gönderimden vazgeç
+        }
     }
-        
 
-    /* DALI_Write_Bit(self, 1);    
-    for (int8_t i = 7; i >= 0; i--) {
-        DALI_Write_Bit(self, (data >> i) & 0x01);
-    } */
-
-    if (!DALI_Write_Bit(self, 1)) return false;
+    if (!DALI_Write_Bit(self, 1)) {
+        NVIC_EnableIRQ(self->uart_irq);
+        return false;
+    }
     for (int8_t i = 7; i >= 0; i--) {
         if (!DALI_Write_Bit(self, (data >> i) & 0x01)) {
+            NVIC_EnableIRQ(self->uart_irq);
             return false; // Çakışma anında hemen çık
         }
-    } 
-    return Send_HIGH(self, DALI_STOP_TIME);
+    }
+    bool ok = Send_HIGH(self, DALI_STOP_TIME);
+    NVIC_EnableIRQ(self->uart_irq);
+    return ok;
 }
 
 static bool send_impl(DALI_t *self, uint32_t data, uint8_t bit_len) 

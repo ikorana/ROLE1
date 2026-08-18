@@ -54,6 +54,11 @@ void Tus5(uint32_t status);
 void Capture_Callback(TIM_TypeDef *TIMx);
 void Timeout_Callback(TIM_TypeDef *TIMx);
 void Adr_Reset(void);
+void Button1_EXTI_Callback(void);
+void Button2_EXTI_Callback(void);
+void Button3_EXTI_Callback(void);
+void Button4_EXTI_Callback(void);
+void Button5_EXTI_Callback(void);
 
 
 /* USER CODE END Includes */

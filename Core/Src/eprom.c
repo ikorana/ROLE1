@@ -27,6 +27,7 @@ bool read_eeprom(volatile DALI_Address_t *settings_array) {
             settings_array[i].device_type             = 0x07;
             settings_array[i].next_device_type        = 0x07;
             settings_array[i].uart_ID                 = 254; // fabrika/blank-flash varsayılanı
+            settings_array[i].tus_type                = 0;   // varsayılan: toggle
         }
              
         write_eeprom(settings_array); 

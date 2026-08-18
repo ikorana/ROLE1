@@ -9,20 +9,40 @@
       5. Tuş Lamba Aç Kapat
          **** Uzun Basma Adresleri SIL
             ---------
-      RS485 destegi var. Komutlar:
-        {"com":"adres","dev":xx,"adr":yy}
+      RS485 destegi var. Tüm komutlar "rl1_" öneki taşır — STM32 bu öneki
+      görünce içeriğe bakmadan RS485<->ESP32 arasında olduğu gibi iletir,
+      yeni bir rl1_ komutu eklemek STM32 tarafında değişiklik gerektirmez.
+
+      Komutlar:
+        {"com":"rl1_adres","dev":xx,"adr":yy}
            dev : 1 Lamba
-                 2 Lamba 
+                 2 Lamba
                  3 Lamba
                  4 Lamba
                  5 Lamba
            adr : 0-63 veya 255 (adresi sil)
-       
-        {"com":"status","dev":xx,"durum":yy}  
+
+        {"com":"rl1_get_adres"}              -> cevap: {"com":"rl1_get_adres","adr":[a1,a2,a3,a4,a5]}
+           5 kanalın (Lamba 1-5) o anki DALI adreslerini tek seferde döner.
+           255 = adres atanmamış.
+
+        {"com":"rl1_status","dev":xx,"durum":yy}
            dev : 1-5
-           durum :   0 Close 
-                     1 Open 
-                     2 Toggle                                 
+           durum :   0 Close
+                     1 Open
+                     2 Toggle
+
+        {"com":"rl1_get_id"}                 -> cevap: {"com":"rl1_get_id","id":X,"frmtype":Y}
+           frmtype : firmware/donanım tipi, aynı rl1_ protokolünü konuşan farklı
+                     uç kartları ayırt etmek için. ROLE1 (5li röle) = 1.
+        {"com":"rl1_set_id","id":X}          -> board'un kalıcı RS485 kimliğini atar
+                                                 (X<254; 254/255 ayrılmış)
+
+        {"com":"rl1_set_tustype","dev":xx,"type":yy}
+           dev : 1-5 (Lamba N'nin fiziksel tuşu)
+           type: 0 = toggle (basma onaylanınca aç/kapa değiştir, varsayılan)
+                 1 = momentary (basılıyken aç, bırakılınca kapat)
+        {"com":"rl1_get_tustype"}            -> cevap: {"com":"rl1_get_tustype","type":[t1,t2,t3,t4,t5]}
             --------
     Created Version 2.0
       Tarih : 16.05.2025
@@ -106,24 +126,18 @@ UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_rx;
 
 /* USER CODE BEGIN PV */
-volatile bool tus1_active = false;
-volatile bool tus1_manual = false;
-
-volatile bool tus2_active = false;
-volatile bool tus2_manual = false;
-
-volatile bool tus3_active = false;
-volatile bool tus3_manual = false;
-
-volatile bool tus4_active = false;
-volatile bool tus4_manual = false;
-
-volatile uint16_t tus1_counter = 0, tus2_counter = 0, tus3_counter = 0, tus4_counter = 0, tus5_counter = 0;
-
-static uint16_t btn_debounce_timers[5] = {50, 50, 50, 50, 50};
+#define BTN_DEBOUNCE_TICKS 20 // 200ms (20 * 10ms)
+static uint16_t btn_debounce_timers[5] = {BTN_DEBOUNCE_TICKS, BTN_DEBOUNCE_TICKS, BTN_DEBOUNCE_TICKS, BTN_DEBOUNCE_TICKS, BTN_DEBOUNCE_TICKS};
 static uint8_t  btn_last_raw_states[5] = {0};
-volatile bool tus5_active = false;
-volatile bool tus5_reset_triggered = false;
+
+// Tus1-5'in hepsi artık EXTI ile tetikleniyor. Bu bayraklar bir kenar
+// geldiğini işaret eder; Button_Filter_Update sadece bayrak set edildiğinde
+// ilgili tuşun debounce'unu çalıştırır, aksi halde her 10ms'de boşuna pin okumaz.
+volatile bool tus1_watch_active = false;
+volatile bool tus2_watch_active = false;
+volatile bool tus3_watch_active = false;
+volatile bool tus4_watch_active = false;
+volatile bool tus5_watch_active = false;
 
 /* USER CODE END PV */
 
@@ -160,34 +174,66 @@ void Capture_Callback(TIM_TypeDef *TIMx)
    dali.capture_handle(&dali,TIMx);
 }
 
-void Button_Filter_Update(void) {
-    uint8_t raw[5];
-    // Pin okumalarını diziye al (Logic inverse: !LL_GPIO...)
-    raw[0] = !LL_GPIO_IsInputPinSet(IN4_GPIO_Port, IN4_Pin); // Tus1
-    raw[1] = !LL_GPIO_IsInputPinSet(IN3_GPIO_Port, IN3_Pin); // Tus2
-    raw[2] = !LL_GPIO_IsInputPinSet(IN2_GPIO_Port, IN2_Pin); // Tus3
-    raw[3] = !LL_GPIO_IsInputPinSet(IN1_GPIO_Port, IN1_Pin); // Tus4
-    raw[4] = !LL_GPIO_IsInputPinSet(IN5_GPIO_Port, IN5_Pin); // Tus5
+// EXTI1'den (Tus1/IN4/PB1, her iki kenar) çağrılır. Hafif tutulmalı: sadece
+// "bir kenar geldi, debounce'a bak" bayrağını set eder, işi Button_Filter_Update
+// (10ms tick) yapar — aynı bounce toleransı (500ms) korunur.
 
-    for (int i = 0; i < 5; i++) {
-        if (raw[i] != btn_last_raw_states[i]) {
-            btn_debounce_timers[i] = 0;
-            btn_last_raw_states[i] = raw[i];
-        } else {
-            if (btn_debounce_timers[i] < 50) { // 500ms filtre (50 * 10ms)
-                if (++btn_debounce_timers[i] == 50) {
-                    // Kararlı duruma ulaşıldı, ilgili fonksiyonu tetikle
-                    switch(i) {
-                        case 0: Tus1(raw[i]); break;
-                        case 1: Tus2(raw[i]); break;
-                        case 2: Tus3(raw[i]); break;
-                        case 3: Tus4(raw[i]); break;
-                        case 4: Tus5(raw[i]); break;
-                    }
-                }
-            }
+void Button1_EXTI_Callback(void)
+{
+    tus1_watch_active = true;
+}
+
+// EXTI0'dan (Tus2/IN3/PB0, her iki kenar) çağrılır — Button1_EXTI_Callback ile aynı desen.
+void Button2_EXTI_Callback(void)
+{
+    tus2_watch_active = true;
+}
+
+// EXTI9_5'ten (Tus3/IN2/PA7, her iki kenar) çağrılır — aynı desen.
+void Button3_EXTI_Callback(void)
+{
+    tus3_watch_active = true;
+}
+
+// EXTI9_5'ten (Tus4/IN1/PA6, her iki kenar) çağrılır — aynı desen.
+void Button4_EXTI_Callback(void)
+{
+    tus4_watch_active = true;
+}
+
+// EXTI15_10'dan (Tus5/IN5/PC14, her iki kenar) çağrılır — aynı desen.
+void Button5_EXTI_Callback(void)
+{
+    tus5_watch_active = true;
+}
+
+// EXTI ile tetiklenen tuşlar için ortak debounce: bir kenar gelmediyse
+// (*watch_active == false) pini her 10ms'de boşuna okumuyoruz; kenar
+// geldiyse seviye BTN_DEBOUNCE_TICKS boyunca kararlı kalınca handler'ı
+// çağırıp tekrar uykuya geçiyoruz.
+static void Debounce_Watched_Button(volatile bool *watch_active, GPIO_TypeDef *port, uint32_t pin,
+                                     uint8_t idx, void (*handler)(uint32_t))
+{
+    if (!*watch_active) return;
+
+    uint8_t raw = !LL_GPIO_IsInputPinSet(port, pin);
+    if (raw != btn_last_raw_states[idx]) {
+        btn_debounce_timers[idx] = 0;
+        btn_last_raw_states[idx] = raw;
+    } else if (btn_debounce_timers[idx] < BTN_DEBOUNCE_TICKS) {
+        if (++btn_debounce_timers[idx] == BTN_DEBOUNCE_TICKS) {
+            handler(raw);
+            *watch_active = false;
         }
     }
+}
+
+void Button_Filter_Update(void) {
+    Debounce_Watched_Button(&tus1_watch_active, IN4_GPIO_Port, IN4_Pin, 0, Tus1);
+    Debounce_Watched_Button(&tus2_watch_active, IN3_GPIO_Port, IN3_Pin, 1, Tus2);
+    Debounce_Watched_Button(&tus3_watch_active, IN2_GPIO_Port, IN2_Pin, 2, Tus3);
+    Debounce_Watched_Button(&tus4_watch_active, IN1_GPIO_Port, IN1_Pin, 3, Tus4);
+    Debounce_Watched_Button(&tus5_watch_active, IN5_GPIO_Port, IN5_Pin, 4, Tus5);
 }
 
 void Timeout_Callback(TIM_TypeDef *TIMx)
@@ -201,20 +247,7 @@ void Timeout_Callback(TIM_TypeDef *TIMx)
     }
 
     Button_Filter_Update();
-
-  
-    // Tus 5 Uzun Basım (Adres Reset) Kontrolü (5 saniye)
-    if (tus5_active) {
-      if (++tus5_counter >= 500) { // 5 saniye (500 * 10ms)
-        if (!tus5_reset_triggered) {
-          tus5_reset_triggered = true;
-          Adr_Reset();
-          // Opsiyonel: Reset başarılı bildirimi için röleyi toggle yapabilirsiniz
-          // Relay_Toggle(&relay); 
-        }
-      }
-    }
-  } 
+  }
 }
 
 void Adr_Reset(void)
@@ -259,7 +292,9 @@ void DaliDataCallback(uint32_t rxdata, uint8_t bit)
         // Tüm Blindlere gelen paketi kontrol etmesi için gönder
         for (int i = 0; i < 5; i++) {
             uint8_t kk=Relay_HandleDALI(&relays[i], addr, data_byte);
-            if (kk==1) break;
+            if (kk==1) {
+              break;
+            }
         }
     } else if (bit == 8) {
         // Genellikle cihazdan gelen cevap (Backward Frame)
@@ -285,6 +320,7 @@ void DaliSaveCallback(void)
 }
 
 #define MAX_TOKEN 32
+#define RL1_FRMTYPE 1 // ROLE1 (5li röle)
 
 void command_process(char * data)
 {
@@ -296,7 +332,7 @@ void command_process(char * data)
     if (r>0) {
         char command[25];
         if (json_get_value(data, tokens, r, "com", command, sizeof(command)) == 0) {
-              if (strcmp(command,"adres")==0) {
+              if (strcmp(command,"rl1_adres")==0) {
                 uint8_t dev=0xFF, adr=0xFF;
                 json_get_int(data, tokens, r,"dev",&dev);
                 json_get_int(data, tokens, r,"adr",&adr);
@@ -308,7 +344,13 @@ void command_process(char * data)
                 }
               }
 
-              if (strcmp(command,"status")==0)
+              if (strcmp(command,"rl1_get_adres")==0) {
+                printf("{\"com\":\"rl1_get_adres\",\"adr\":[%d,%d,%d,%d,%d]}#\r\n",
+                    AdresList[0].short_address, AdresList[1].short_address, AdresList[2].short_address,
+                    AdresList[3].short_address, AdresList[4].short_address);
+              }
+
+              if (strcmp(command,"rl1_status")==0)
               {
                 uint8_t dev=0xFF, dur=0xFF;
                 json_get_int(data, tokens, r,"dev",&dev);
@@ -320,11 +362,11 @@ void command_process(char * data)
                 }
               }
 
-              if (strcmp(command,"get_id")==0) {
-                printf("{\"com\":\"get_id\",\"id\":%d}#\r\n", AdresList[0].uart_ID);
+              if (strcmp(command,"rl1_get_id")==0) {
+                printf("{\"com\":\"rl1_get_id\",\"id\":%d,\"frmtype\":%d}#\r\n", AdresList[0].uart_ID, RL1_FRMTYPE);
               }
 
-              if (strcmp(command,"set_id")==0) {
+              if (strcmp(command,"rl1_set_id")==0) {
                 uint8_t id=0xFF;
                 json_get_int(data, tokens, r,"id",&id);
                 // 254: fabrika/blank-flash varsayılanı, 255: ileride broadcast için
@@ -333,7 +375,23 @@ void command_process(char * data)
                   AdresList[0].uart_ID = id;
                   write_eeprom(AdresList);
                 }
-                printf("{\"com\":\"set_id\",\"id\":%d}#\r\n", AdresList[0].uart_ID);
+                printf("{\"com\":\"rl1_set_id\",\"id\":%d}#\r\n", AdresList[0].uart_ID);
+              }
+
+              if (strcmp(command,"rl1_set_tustype")==0) {
+                uint8_t dev=0xFF, type=0xFF;
+                json_get_int(data, tokens, r,"dev",&dev);
+                json_get_int(data, tokens, r,"type",&type);
+                if (dev>0 && dev<6 && (type==0 || type==1)) {
+                  AdresList[dev-1].tus_type = type;
+                  write_eeprom(AdresList);
+                }
+              }
+
+              if (strcmp(command,"rl1_get_tustype")==0) {
+                printf("{\"com\":\"rl1_get_tustype\",\"type\":[%d,%d,%d,%d,%d]}#\r\n",
+                    AdresList[0].tus_type, AdresList[1].tus_type, AdresList[2].tus_type,
+                    AdresList[3].tus_type, AdresList[4].tus_type);
               }
         }
     }
@@ -805,6 +863,74 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
   LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+  /* Tus1 (IN4/PB1) artık EXTI ile tetikleniyor — her iki kenarda da
+     (basma/bırakma) kesme üretir, debounce Button_Filter_Update'te. */
+  LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_SYSCFG);
+  LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTB, LL_SYSCFG_EXTI_LINE1);
+  {
+    LL_EXTI_InitTypeDef EXTI_InitStruct = {0};
+    EXTI_InitStruct.Line_0_31 = LL_EXTI_LINE_1;
+    EXTI_InitStruct.LineCommand = ENABLE;
+    EXTI_InitStruct.Mode = LL_EXTI_MODE_IT;
+    EXTI_InitStruct.Trigger = LL_EXTI_TRIGGER_RISING_FALLING;
+    LL_EXTI_Init(&EXTI_InitStruct);
+  }
+  NVIC_SetPriority(EXTI1_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),0, 0));
+  NVIC_EnableIRQ(EXTI1_IRQn);
+
+  /* Tus2 (IN3/PB0) da aynı şekilde EXTI ile tetikleniyor. */
+  LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTB, LL_SYSCFG_EXTI_LINE0);
+  {
+    LL_EXTI_InitTypeDef EXTI_InitStruct = {0};
+    EXTI_InitStruct.Line_0_31 = LL_EXTI_LINE_0;
+    EXTI_InitStruct.LineCommand = ENABLE;
+    EXTI_InitStruct.Mode = LL_EXTI_MODE_IT;
+    EXTI_InitStruct.Trigger = LL_EXTI_TRIGGER_RISING_FALLING;
+    LL_EXTI_Init(&EXTI_InitStruct);
+  }
+  NVIC_SetPriority(EXTI0_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),0, 0));
+  NVIC_EnableIRQ(EXTI0_IRQn);
+
+  /* Tus3 (IN2/PA7) da aynı şekilde EXTI ile tetikleniyor. PA7, pin 5-9
+     grubunun paylaşımlı EXTI9_5_IRQn vektörünü kullanıyor. */
+  LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTA, LL_SYSCFG_EXTI_LINE7);
+  {
+    LL_EXTI_InitTypeDef EXTI_InitStruct = {0};
+    EXTI_InitStruct.Line_0_31 = LL_EXTI_LINE_7;
+    EXTI_InitStruct.LineCommand = ENABLE;
+    EXTI_InitStruct.Mode = LL_EXTI_MODE_IT;
+    EXTI_InitStruct.Trigger = LL_EXTI_TRIGGER_RISING_FALLING;
+    LL_EXTI_Init(&EXTI_InitStruct);
+  }
+  NVIC_SetPriority(EXTI9_5_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),0, 0));
+  NVIC_EnableIRQ(EXTI9_5_IRQn);
+
+  /* Tus4 (IN1/PA6) da aynı şekilde EXTI ile tetikleniyor. PA6 da EXTI9_5_IRQn
+     vektörünü Tus3 (PA7) ile paylaşıyor — NVIC zaten yukarıda açıldı. */
+  LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTA, LL_SYSCFG_EXTI_LINE6);
+  {
+    LL_EXTI_InitTypeDef EXTI_InitStruct = {0};
+    EXTI_InitStruct.Line_0_31 = LL_EXTI_LINE_6;
+    EXTI_InitStruct.LineCommand = ENABLE;
+    EXTI_InitStruct.Mode = LL_EXTI_MODE_IT;
+    EXTI_InitStruct.Trigger = LL_EXTI_TRIGGER_RISING_FALLING;
+    LL_EXTI_Init(&EXTI_InitStruct);
+  }
+
+  /* Tus5 (IN5/PC14) da aynı şekilde EXTI ile tetikleniyor. PC14, pin 10-15
+     grubunun paylaşımlı EXTI15_10_IRQn vektörünü kullanıyor. */
+  LL_SYSCFG_SetEXTISource(LL_SYSCFG_EXTI_PORTC, LL_SYSCFG_EXTI_LINE14);
+  {
+    LL_EXTI_InitTypeDef EXTI_InitStruct = {0};
+    EXTI_InitStruct.Line_0_31 = LL_EXTI_LINE_14;
+    EXTI_InitStruct.LineCommand = ENABLE;
+    EXTI_InitStruct.Mode = LL_EXTI_MODE_IT;
+    EXTI_InitStruct.Trigger = LL_EXTI_TRIGGER_RISING_FALLING;
+    LL_EXTI_Init(&EXTI_InitStruct);
+  }
+  NVIC_SetPriority(EXTI15_10_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(),0, 0));
+  NVIC_EnableIRQ(EXTI15_10_IRQn);
+
   /**/
   GPIO_InitStruct.Pin = DALI_TX_Pin;
   GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
@@ -820,89 +946,33 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-void Tus1(uint32_t status){
-  if (status == 1) { // Tuşa basıldı
-    tus1_active = true;
-    tus1_counter = 0;
-    tus1_manual = false;
-  } else { // Tuş bırakıldı
-    if (tus1_active) {
-      if (!tus1_manual) {
-        // Uzun basımdaysa bırakıldığı an durdur
-        Relay_Toggle(&relays[0]);
-      } 
-    }
-    tus1_active = false;
+// tus_type EEPROM'dan okunuyor (AdresList[idx].tus_type): 1 = momentary
+// (basılıyken aç, bırakılınca kapat), başka her değer (0 dahil, ve eski
+// kartlarda henüz hiç yazılmamış olabilecek rastgele leftover baytlar dahil)
+// güvenli varsayılan olan toggle'a düşer.
+static void Tus_Common(uint8_t idx, uint32_t status) {
+  if (AdresList[idx].tus_type == 1) {
+    if (status == 1) Relay_On(&relays[idx]); else Relay_Off(&relays[idx]);
+  } else {
+    if (status == 1) Relay_Toggle(&relays[idx]);
   }
 }
-void Tus2(uint32_t status){
-  if (status == 1) { // Tuşa basıldı
-    tus2_active = true;
-    tus2_counter = 0;
-    tus2_manual = false;
-  } else { // Tuş bırakıldı
-    if (tus2_active) {
-      if (!tus2_manual) {
-        // Uzun basımdaysa bırakıldığı an durdur
-        Relay_Toggle(&relays[1]);
-      } 
-    }
-    tus2_active = false;
-  }
-}
-void Tus3(uint32_t status){
-  if (status == 1) { // Tuşa basıldı
-    tus3_active = true;
-    tus3_counter = 0;
-    tus3_manual = false;
-  } else { // Tuş bırakıldı
-    if (tus3_active) {
-      if (!tus3_manual) {
-        // Uzun basımdaysa bırakıldığı an durdur
-        Relay_Toggle(&relays[2]);
-      }
-    }
-    tus3_active = false;
-  }
-}
-void Tus4(uint32_t status){
-  if (status == 1) { // Tuşa basıldı
-    tus4_active = true;
-    tus4_counter = 0;
-    tus4_manual = false;
-  } else { // Tuş bırakıldı
-    if (tus4_active) {
-      if (!tus4_manual) {
-        // Uzun basımdaysa bırakıldığı an durdur
-        Relay_Toggle(&relays[3]);
-      }
-    }
-    tus4_active = false;
-  }
-}
-void Tus5(uint32_t status){
-  if (status == 1) { // Tuşa basıldı
-    tus5_active = true;
-    tus5_counter = 0;
-    tus5_reset_triggered = false;
-  } else { // Tuş bırakıldı
-    if (tus5_active && !tus5_reset_triggered) {
-      // Eğer 5 saniye dolmadan bırakıldıysa kısa basım kabul et
-      Relay_Toggle(&relays[4]);
-    }
-    tus5_active = false;
-  }
-}
+
+void Tus1(uint32_t status){ Tus_Common(0, status); }
+void Tus2(uint32_t status){ Tus_Common(1, status); }
+void Tus3(uint32_t status){ Tus_Common(2, status); }
+void Tus4(uint32_t status){ Tus_Common(3, status); }
+void Tus5(uint32_t status){ Tus_Common(4, status); }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
     //Uartta hata oluşur ve flaglar temizlenmez ise uart kilitlenir. 
     //Bu nedenle Uart4 de hata oluşursa bayrakları temizliyoruz
-    if (huart->Instance == USART1) { 
+    if (huart->Instance == USART2) {
         // 1. Hatayı temizle (ORE, FE, NE, PE gibi bayraklar)
-        __HAL_UART_CLEAR_OREFLAG(huart); 
+        __HAL_UART_CLEAR_OREFLAG(huart);
         __HAL_UART_CLEAR_NEFLAG(huart);
         __HAL_UART_CLEAR_FEFLAG(huart);
-        
+
         // 2. RX işlemini tekrar başlat
         HAL_UARTEx_ReceiveToIdle_DMA(&huart2, uart2_rx_buffer, sizeof(uart2_rx_buffer));
     }
@@ -910,7 +980,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-    if (huart->Instance == USART1)
+    if (huart->Instance == USART2)
     {
         // Buffer içinde # karakterini ara
         uint8_t found = 0;

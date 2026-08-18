@@ -288,6 +288,79 @@ void TIM1_CC_IRQHandler(void)
 }
 
 /**
+  * @brief This function handles EXTI line1 interrupt (Tus1 / IN4 / PB1).
+  */
+void EXTI1_IRQHandler(void)
+{
+  /* USER CODE BEGIN EXTI1_IRQn 0 */
+  if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_1))
+  {
+    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_1);
+    Button1_EXTI_Callback();
+  }
+  /* USER CODE END EXTI1_IRQn 0 */
+  /* USER CODE BEGIN EXTI1_IRQn 1 */
+
+  /* USER CODE END EXTI1_IRQn 1 */
+}
+
+/**
+  * @brief This function handles EXTI line0 interrupt (Tus2 / IN3 / PB0).
+  */
+void EXTI0_IRQHandler(void)
+{
+  /* USER CODE BEGIN EXTI0_IRQn 0 */
+  if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_0))
+  {
+    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_0);
+    Button2_EXTI_Callback();
+  }
+  /* USER CODE END EXTI0_IRQn 0 */
+  /* USER CODE BEGIN EXTI0_IRQn 1 */
+
+  /* USER CODE END EXTI0_IRQn 1 */
+}
+
+/**
+  * @brief This function handles EXTI line[5:9] interrupts (Tus3 / IN2 / PA7, Tus4 / IN1 / PA6).
+  */
+void EXTI9_5_IRQHandler(void)
+{
+  /* USER CODE BEGIN EXTI9_5_IRQn 0 */
+  if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_7))
+  {
+    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_7);
+    Button3_EXTI_Callback();
+  }
+  if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_6))
+  {
+    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_6);
+    Button4_EXTI_Callback();
+  }
+  /* USER CODE END EXTI9_5_IRQn 0 */
+  /* USER CODE BEGIN EXTI9_5_IRQn 1 */
+
+  /* USER CODE END EXTI9_5_IRQn 1 */
+}
+
+/**
+  * @brief This function handles EXTI line[10:15] interrupts (Tus5 / IN5 / PC14).
+  */
+void EXTI15_10_IRQHandler(void)
+{
+  /* USER CODE BEGIN EXTI15_10_IRQn 0 */
+  if (LL_EXTI_IsActiveFlag_0_31(LL_EXTI_LINE_14))
+  {
+    LL_EXTI_ClearFlag_0_31(LL_EXTI_LINE_14);
+    Button5_EXTI_Callback();
+  }
+  /* USER CODE END EXTI15_10_IRQn 0 */
+  /* USER CODE BEGIN EXTI15_10_IRQn 1 */
+
+  /* USER CODE END EXTI15_10_IRQn 1 */
+}
+
+/**
   * @brief This function handles TIM2 global interrupt.
   */
 void TIM2_IRQHandler(void)
