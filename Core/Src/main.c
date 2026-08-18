@@ -43,6 +43,16 @@
            type: 0 = toggle (basma onaylanınca aç/kapa değiştir, varsayılan)
                  1 = momentary (basılıyken aç, bırakılınca kapat)
         {"com":"rl1_get_tustype"}            -> cevap: {"com":"rl1_get_tustype","type":[t1,t2,t3,t4,t5]}
+
+        {"com":"rl1_reset_params","dev":xx}  -> cevap: {"com":"rl1_reset_params","dev":xx,"ok":1}
+           dev : 1-5
+           İlgili kanalın DALI parametrelerini (groups, min/max/power_on/
+           system_failure level, fade/efade, PHM) fabrika varsayılanına
+           döndürür. short_address/uart_ID/tus_type'a DOKUNMAZ — eski struct
+           layout'uyla flaşlanmış (def=0x55 zaten yazılı, read_eeprom'daki
+           ilklendirme hiç tetiklenmemiş) kartlarda bu alanlarda çöp veri
+           kalabiliyor; bu komut ST-Link olmadan, sahada RS485 üzerinden
+           düzeltilmesini sağlar.
             --------
     Created Version 2.0
       Tarih : 16.05.2025
@@ -392,6 +402,27 @@ void command_process(char * data)
                 printf("{\"com\":\"rl1_get_tustype\",\"type\":[%d,%d,%d,%d,%d]}#\r\n",
                     AdresList[0].tus_type, AdresList[1].tus_type, AdresList[2].tus_type,
                     AdresList[3].tus_type, AdresList[4].tus_type);
+              }
+
+              if (strcmp(command,"rl1_reset_params")==0) {
+                uint8_t dev=0xFF, ok=0;
+                json_get_int(data, tokens, r,"dev",&dev);
+                if (dev>0 && dev<6) {
+                  volatile DALI_Address_t *a = &AdresList[dev-1];
+                  a->groups                 = 0x0000;
+                  a->PHM                    = 0x1;
+                  a->min_level              = a->PHM;
+                  a->max_level              = 0xFE;
+                  a->power_on_level         = 0xFE;
+                  a->system_failure_level   = 0xFE;
+                  a->fade_rate              = 0x07;
+                  a->fade_time              = 0x00;
+                  a->efade_time_base        = 0x00;
+                  a->efade_multiplayer      = 0x00;
+                  write_eeprom(AdresList);
+                  ok=1;
+                }
+                printf("{\"com\":\"rl1_reset_params\",\"dev\":%d,\"ok\":%d}#\r\n", dev, ok);
               }
         }
     }
