@@ -4,7 +4,7 @@
     #include <time.h>
 
     /*
-      5 adet  lamba adresler. 
+      5 adet dali lamba adresler. 
       
       5. Tuş Lamba Aç Kapat
          **** Uzun Basma Adresleri SIL
@@ -53,9 +53,30 @@
            ilklendirme hiç tetiklenmemiş) kartlarda bu alanlarda çöp veri
            kalabiliyor; bu komut ST-Link olmadan, sahada RS485 üzerinden
            düzeltilmesini sağlar.
+
+        --- Üretim/Fabrika Testi (test masası, adresleme ÖNCESİ) ---
+        {"com":"rl1_status_all","durum":yy}  -> cevap yok (fire-and-forget)
+           5 rölenin HEPSİNİ birden etkiler. durum: rl1_status ile aynı
+           (0=Kapat,1=Aç,2=Toggle). Operatör tüm röleleri tek komutla
+           açıp/kapatıp hepsinin tık sesini/çalıştığını duyabilsin diye.
+
+        {"com":"rl1_set_testmode","mode":X}  -> cevap: {"com":"rl1_set_testmode","mode":X}
+           X: 1=aç, 0=kapat. SADECE RAM'de tutulur, EEPROM'a yazılmaz —
+           her güç kesilmesinde otomatik false'a döner (fail-safe: sahaya
+           giden bir kart yanlışlıkla test modunda kalmaz).
+        {"com":"rl1_get_testmode"}           -> cevap: {"com":"rl1_get_testmode","mode":X}
+
+           Test modu AÇIKKEN: fiziksel Tus1-5'ten biri basılınca/bırakılınca,
+           normal lokal röle davranışına EK OLARAK RS485'e de bildirilir:
+           {"com":"rl1_tus","dev":xx,"durum":yy}  (dev:1-5, durum:0=bırakıldı/1=basıldı)
+           Fabrika test ekranı bunu dinleyip operatörün 5 tuşa da bastığını
+           canlı olarak doğrulayabilsin diye.
             --------
     Created Version 2.0
       Tarih : 16.05.2025
+    Version 2.1 — rl1_reset_params, rl1_status_all, rl1_set/get_testmode,
+      test modunda rl1_tus tuş raporlama
+      Tarih : 19.08.2026
 
     -----------------------------------
 
@@ -139,6 +160,13 @@ DMA_HandleTypeDef hdma_usart2_rx;
 #define BTN_DEBOUNCE_TICKS 20 // 200ms (20 * 10ms)
 static uint16_t btn_debounce_timers[5] = {BTN_DEBOUNCE_TICKS, BTN_DEBOUNCE_TICKS, BTN_DEBOUNCE_TICKS, BTN_DEBOUNCE_TICKS, BTN_DEBOUNCE_TICKS};
 static uint8_t  btn_last_raw_states[5] = {0};
+
+// Fabrika/atölye test modu — SADECE RAM'de tutulur, EEPROM'a YAZILMAZ.
+// Kasıtlı: her güç kesilip-verilmesinde (kutulama/nakliye/saha kurulumu
+// sırasında) otomatik olarak kapanır (fail-safe varsayılan=false), böylece
+// "test modunu kapatmayı unuttuk" diye sahada gereksiz RS485 trafiği üreten
+// bir kart kalmaz. rl1_set_testmode ile açılır/kapanır.
+static volatile bool rl1_test_mode = false;
 
 // Tus1-5'in hepsi artık EXTI ile tetikleniyor. Bu bayraklar bir kenar
 // geldiğini işaret eder; Button_Filter_Update sadece bayrak set edildiğinde
@@ -370,6 +398,28 @@ void command_process(char * data)
                   if (dur==1) Relay_On(&relays[dev-1]);
                   if (dur==2) Relay_Toggle(&relays[dev-1]);
                 }
+              }
+
+              if (strcmp(command,"rl1_status_all")==0)
+              {
+                uint8_t dur=0xFF;
+                json_get_int(data, tokens, r,"durum",&dur);
+                for (uint8_t i=0;i<5;i++) {
+                  if (dur==0) Relay_Off(&relays[i]);
+                  if (dur==1) Relay_On(&relays[i]);
+                  if (dur==2) Relay_Toggle(&relays[i]);
+                }
+              }
+
+              if (strcmp(command,"rl1_set_testmode")==0) {
+                uint8_t mode=0xFF;
+                json_get_int(data, tokens, r,"mode",&mode);
+                if (mode==0 || mode==1) rl1_test_mode = (mode==1);
+                printf("{\"com\":\"rl1_set_testmode\",\"mode\":%d}#\r\n", rl1_test_mode ? 1 : 0);
+              }
+
+              if (strcmp(command,"rl1_get_testmode")==0) {
+                printf("{\"com\":\"rl1_get_testmode\",\"mode\":%d}#\r\n", rl1_test_mode ? 1 : 0);
               }
 
               if (strcmp(command,"rl1_get_id")==0) {
@@ -982,6 +1032,13 @@ static void MX_GPIO_Init(void)
 // kartlarda henüz hiç yazılmamış olabilecek rastgele leftover baytlar dahil)
 // güvenli varsayılan olan toggle'a düşer.
 static void Tus_Common(uint8_t idx, uint32_t status) {
+  // Test modunda: lokal röle davranışına DOKUNMADAN, fiziksel tuşun
+  // basılıp/bırakıldığını RS485'e de bildir — fabrika test ekranı bunu
+  // dinleyip operatörün 5 tuşa da bastığını canlı olarak doğrulayabilsin.
+  if (rl1_test_mode) {
+    printf("{\"com\":\"rl1_tus\",\"dev\":%d,\"durum\":%lu}#\r\n", idx+1, status);
+  }
+
   if (AdresList[idx].tus_type == 1) {
     if (status == 1) Relay_On(&relays[idx]); else Relay_Off(&relays[idx]);
   } else {
