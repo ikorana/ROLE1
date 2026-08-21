@@ -32,9 +32,11 @@
                      1 Open
                      2 Toggle
 
-        {"com":"rl1_get_id"}                 -> cevap: {"com":"rl1_get_id","id":X,"frmtype":Y}
+        {"com":"rl1_get_id"}                 -> cevap: {"com":"rl1_get_id","id":X,"frmtype":Y,"fwver":"Z"}
            frmtype : firmware/donanım tipi, aynı rl1_ protokolünü konuşan farklı
                      uç kartları ayırt etmek için. ROLE1 (5li röle) = 1.
+           fwver   : gömülü firmware versiyonu (RL1_FW_VERSION), configurator'da
+                     gösterilmek üzere.
         {"com":"rl1_set_id","id":X}          -> board'un kalıcı RS485 kimliğini atar
                                                  (X<254; 254/255 ayrılmış)
 
@@ -168,6 +170,18 @@ static uint8_t  btn_last_raw_states[5] = {0};
 // bir kart kalmaz. rl1_set_testmode ile açılır/kapanır.
 static volatile bool rl1_test_mode = false;
 
+// rl1_dalitst: DALI çıkışının fiziksel olarak çalışıp çalışmadığını
+// (osiloskopla) görsel test etmek için — komut her geldiğinde TOGGLE olur.
+// Aktifken 2sn boyunca her 10ms'de bir DALI "1" biti gönderilir (hat üzerinde
+// ~50Hz'lik gözle görülür bir aktivite), sonra 2sn tamamen durur, bu döngü
+// tekrar komut gelene (ya da test modu kapanana) kadar sürer. RAM-only,
+// EEPROM'a yazılmaz. Zamanlama TIM2'nin zaten var olan 10ms tick'inde
+// (Timeout_Callback) bir sayaç ile yönetiliyor — RTOS/thread gerekmez.
+static volatile bool rl1_dalitst_active = false;
+static volatile bool rl1_dalitst_on_phase = false;
+static volatile uint16_t rl1_dalitst_counter = 0;
+#define RL1_DALITST_PHASE_TICKS 200 // 200 * 10ms = 2000ms
+
 // Tus1-5'in hepsi artık EXTI ile tetikleniyor. Bu bayraklar bir kenar
 // geldiğini işaret eder; Button_Filter_Update sadece bayrak set edildiğinde
 // ilgili tuşun debounce'unu çalıştırır, aksi halde her 10ms'de boşuna pin okumaz.
@@ -285,6 +299,16 @@ void Timeout_Callback(TIM_TypeDef *TIMx)
     }
 
     Button_Filter_Update();
+
+    if (rl1_dalitst_active) {
+      if (rl1_dalitst_on_phase) {
+        DALI_Send_Test_Tick(&dali);
+      }
+      if (++rl1_dalitst_counter >= RL1_DALITST_PHASE_TICKS) {
+        rl1_dalitst_counter = 0;
+        rl1_dalitst_on_phase = !rl1_dalitst_on_phase;
+      }
+    }
   }
 }
 
@@ -359,6 +383,7 @@ void DaliSaveCallback(void)
 
 #define MAX_TOKEN 32
 #define RL1_FRMTYPE 1 // ROLE1 (5li röle)
+#define RL1_FW_VERSION "2.2"
 
 void command_process(char * data)
 {
@@ -415,6 +440,7 @@ void command_process(char * data)
                 uint8_t mode=0xFF;
                 json_get_int(data, tokens, r,"mode",&mode);
                 if (mode==0 || mode==1) rl1_test_mode = (mode==1);
+                if (!rl1_test_mode) rl1_dalitst_active = false;
                 printf("{\"com\":\"rl1_set_testmode\",\"mode\":%d}#\r\n", rl1_test_mode ? 1 : 0);
               }
 
@@ -422,8 +448,15 @@ void command_process(char * data)
                 printf("{\"com\":\"rl1_get_testmode\",\"mode\":%d}#\r\n", rl1_test_mode ? 1 : 0);
               }
 
+              if (strcmp(command,"rl1_dalitst")==0) {
+                rl1_dalitst_active = !rl1_dalitst_active;
+                rl1_dalitst_counter = 0;
+                rl1_dalitst_on_phase = rl1_dalitst_active;
+                printf("{\"com\":\"rl1_dalitst\",\"active\":%d}#\r\n", rl1_dalitst_active ? 1 : 0);
+              }
+
               if (strcmp(command,"rl1_get_id")==0) {
-                printf("{\"com\":\"rl1_get_id\",\"id\":%d,\"frmtype\":%d}#\r\n", AdresList[0].uart_ID, RL1_FRMTYPE);
+                printf("{\"com\":\"rl1_get_id\",\"id\":%d,\"frmtype\":%d,\"fwver\":\"%s\"}#\r\n", AdresList[0].uart_ID, RL1_FRMTYPE, RL1_FW_VERSION);
               }
 
               if (strcmp(command,"rl1_set_id")==0) {
@@ -1032,11 +1065,12 @@ static void MX_GPIO_Init(void)
 // kartlarda henüz hiç yazılmamış olabilecek rastgele leftover baytlar dahil)
 // güvenli varsayılan olan toggle'a düşer.
 static void Tus_Common(uint8_t idx, uint32_t status) {
-  // Test modunda: lokal röle davranışına DOKUNMADAN, fiziksel tuşun
-  // basılıp/bırakıldığını RS485'e de bildir — fabrika test ekranı bunu
-  // dinleyip operatörün 5 tuşa da bastığını canlı olarak doğrulayabilsin.
+  // Test modunda: SADECE fiziksel tuşun basılıp/bırakıldığını RS485'e
+  // bildir, lokal röleyi TETİKLEME — fabrika testi input'un (butonun)
+  // çalışıp çalışmadığını doğrular, çıkışı değil.
   if (rl1_test_mode) {
     printf("{\"com\":\"rl1_tus\",\"dev\":%d,\"durum\":%lu}#\r\n", idx+1, status);
+    return;
   }
 
   if (AdresList[idx].tus_type == 1) {

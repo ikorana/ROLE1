@@ -438,3 +438,9 @@ void DALI_Send_Test(DALI_t* self){
         _delay_us(self,10000);
     }
 }
+
+// DALI_Send_Test'in blocking olmayan hali: tek bir "1" biti gönderip
+// hemen döner. rl1_dalitst özelliği için TIM2 10ms tick'inden çağrılır.
+void DALI_Send_Test_Tick(DALI_t* self){
+    DALI_Write_Bit(self,1);
+}

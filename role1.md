@@ -1,3 +1,10 @@
+## Fabrika Test Sonuçları (2026-08-21)
+ROLE1 kartı fiziksel olarak test edildi: **RS485 test ekranı fonksiyonları
+düzgün çalışıyor**, **DALI ekranı fonksiyonları düzgün çalışıyor** (DALI
+taramasında cevap veriyor), **telefon05 üzerinden aksiyonlar normal**.
+Tuş testi (checkmark) de dahil, ROLE1 için görünür bir sorun yok — testi
+geçti.
+
 # ROLE1 — TC5000MH-20I Panel Üzerinden Doğrudan RS485 Erişimi
 
 ## Amaç

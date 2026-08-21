@@ -110,6 +110,7 @@ void DALI_Init(DALI_t* self,
 void DALI_Set_DataCallback( DALI_t* self, DALI_DataCallback_t cb);   
 void DALI_Set_ErrorCallback( DALI_t* self, DALI_ErrCallback_t cb); 
 void DALI_Send_Test(DALI_t* self);
+void DALI_Send_Test_Tick(DALI_t* self);
 uint32_t my_rand(void);
 void my_srand(uint32_t seed);
 
